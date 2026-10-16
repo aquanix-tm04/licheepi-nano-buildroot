@@ -1,0 +1,65 @@
+name: Build sdcard image
+
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild_pkgs:
+        description: 'Packages to dirclean first (e.g. "linux uboot")'
+        required: false
+        default: ''
+  push:
+    paths: ['board/**', 'configs/**', 'Dockerfile', 'external.*', 'Config.in']
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}-base" >> $GITHUB_ENV
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (fast, on top of base image)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            BASE_IMAGE=${{ env.IMAGE }}
+            REBUILD_PKGS=${{ inputs.rebuild_pkgs }}
+          outputs: type=tar,dest=dist.tar
+
+      - name: Extract and compress
+        run: |
+          mkdir dist && tar xf dist.tar -C dist
+          ls -lh dist
+          gzip -k dist/sdcard.img
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: licheepi-nano-image
+          path: |
+            dist/sdcard.img.gz
+            dist/*.bin
+
+      - name: Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/sdcard.img.gz
